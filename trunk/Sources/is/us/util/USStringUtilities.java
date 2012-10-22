@@ -49,7 +49,7 @@ public class USStringUtilities extends Object {
 	/**
 	 * Characters allowed for use on permno.
 	 */
-	public static final List<String> ALLOWED_PERMNO_CHARS = Arrays.asList( new String[] { "A", "Á", "B", "C", "D", "Ð", "E", "É", "F", "G", "H", "I", "Í", "J", "K", "L", "M", "N", "O", "Ó", "P", "Q", "R", "S", "T", "U", "Ú", "V", "W", "X", "Y", "Ý", "Þ", "Z", "Æ", "Ö" } ); // 30.07.2008 Bjarni Sævarsson
+	public static final List<String> ALLOWED_PERMNO_CHARS = Arrays.asList( new String[] { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "Á", "B", "C", "D", "Ð", "E", "É", "F", "G", "H", "I", "Í", "J", "K", "L", "M", "N", "O", "Ó", "P", "Q", "R", "S", "T", "U", "Ú", "V", "W", "X", "Y", "Ý", "Þ", "Z", "Æ", "Ö" } ); // 30.07.2008 Bjarni Sævarsson
 
 	/**
 	 * This array contains sets of characters that can be considered similar looking.
