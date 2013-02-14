@@ -1,24 +1,13 @@
 package is.us.util;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.util.HashMap;
-import java.util.Map;
+import java.io.*;
+import java.util.*;
 
-import javax.net.ssl.SSLSocket;
-import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.*;
 
-import nu.xom.Builder;
-import nu.xom.Document;
-import nu.xom.Element;
-import nu.xom.Elements;
-import nu.xom.ParsingException;
-import nu.xom.ValidityException;
+import nu.xom.*;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.slf4j.*;
 
 import sun.misc.BASE64Encoder;
 
@@ -40,7 +29,7 @@ public class USIslandIsAuthenticationClient {
 	private static final String TOKEN_KEY = "TOKEN";
 	private static final String SSN_KEY = "SSN";
 	private static final String SYSID_KEY = "SYSID";
-	private static final String AUTHMETHOD_KEY ="AUTHMETHOD";
+	private static final String AUTHMETHOD_KEY = "AUTHMETHOD";
 	private static final String STATUS_CODE_KEY = "status.code";
 
 	private static final String CRLF = "\r\n";
@@ -87,6 +76,10 @@ public class USIslandIsAuthenticationClient {
 		System.setProperty( "javax.net.ssl.trustStorePassword", keystorePassword );
 	}
 
+	public void authenticate() throws USIslandIsAuthenticationException {
+		samlInfo();// initiate the soap communications
+	}
+
 	/**
 	 * @return The sysid (identifier of the system that handled the login) from
 	 *         the SAML response.
@@ -108,7 +101,7 @@ public class USIslandIsAuthenticationClient {
 	private boolean samlHasErrorStatus( Map<String, String> samlInfo ) {
 		return (samlInfo.containsKey( STATUS_CODE_KEY ) && !samlInfo.get( STATUS_CODE_KEY ).equals( "0" ));
 	}
-	
+
 	/**
 	 * @return The user persidno from the saml response
 	 * @throws USIslandIsAuthenticationException if there is an error getting
@@ -154,11 +147,10 @@ public class USIslandIsAuthenticationClient {
 		Document docXML = null;
 
 		try {
-			
+
 			String response = sendSoapRequest();
-			System.out.println(response);
 			docXML = parser.build( response, "" );
-		   
+
 			logger.debug( "Island.is xml response body: {}", docXML.toXML() );
 
 			// parse the whole soap message
@@ -207,14 +199,12 @@ public class USIslandIsAuthenticationClient {
 	 */
 	private void checkSamlForErrors( Map<String, String> info, Element soapResponseCertSaml ) {
 		Element status = soapResponseCertSaml.getFirstChildElement( "status" );
-        System.out.println(status.toXML());
 		String type = status.getChildElements( "type" ).get( 0 ).getValue();
 		String code = status.getChildElements( "code" ).get( 0 ).getValue();
 		String msg = status.getChildElements( "message" ).get( 0 ).getValue();
 		info.put( "status.type", type );
 		info.put( STATUS_CODE_KEY, code );
 		info.put( "status.message", msg );
-		System.out.println("Texti BLA" + msg);
 		if( !code.equals( "0" ) ) {
 			handleError( "SAML message is not valid! A" );
 		}
@@ -265,7 +255,7 @@ public class USIslandIsAuthenticationClient {
 		// If there are no child elements the stuff is html encoded, and needs to have a separate parse
 		if( saml.getChildElements().size() == 0 ) {
 			try {
-				
+
 				docXML = parser.build( saml.getValue(), "" );
 				assertion = docXML.getRootElement();
 
@@ -388,8 +378,7 @@ public class USIslandIsAuthenticationClient {
 				logger.error( "Failed to close island.is communications socket", e );
 			}
 		}
-		
-		
+
 		return response.toString();
 	}
 
@@ -481,7 +470,7 @@ public class USIslandIsAuthenticationClient {
 	private void handleError( String msg ) {
 		logger.error( msg );
 		throw new USIslandIsAuthenticationException( msg );
-		
+
 	}
 
 	/**
