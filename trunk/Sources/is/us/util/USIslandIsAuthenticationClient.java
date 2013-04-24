@@ -47,6 +47,7 @@ public class USIslandIsAuthenticationClient {
 	private String _userIp;
 	private String _username;
 	private String _password;
+	private String _samlResponse;
 
 	private Map<String, String> _samlInfo;
 
@@ -125,6 +126,10 @@ public class USIslandIsAuthenticationClient {
 		return samlInfo.get( SSN_KEY );
 	}
 
+	public String samlResponse() {
+		return _samlResponse;
+	}
+
 	/**
 	 * Parses the SAML message, from the soap response, and extracts the status
 	 * code/message and user ssn.
@@ -148,8 +153,8 @@ public class USIslandIsAuthenticationClient {
 
 		try {
 
-			String response = sendSoapRequest();
-			docXML = parser.build( response, "" );
+			_samlResponse = sendSoapRequest();
+			docXML = parser.build( _samlResponse, "" );
 
 			logger.debug( "Island.is xml response body: {}", docXML.toXML() );
 
