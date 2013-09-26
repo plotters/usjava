@@ -1,13 +1,20 @@
 package is.us.util;
 
 import java.io.*;
+import java.security.PublicKey;
+import java.security.cert.*;
 import java.util.*;
 
 import javax.net.ssl.*;
-
-import nu.xom.*;
+import javax.xml.bind.DatatypeConverter;
+import javax.xml.crypto.MarshalException;
+import javax.xml.crypto.dsig.*;
+import javax.xml.crypto.dsig.dom.DOMValidateContext;
+import javax.xml.parsers.*;
 
 import org.slf4j.*;
+import org.w3c.dom.*;
+import org.xml.sax.SAXException;
 
 import sun.misc.BASE64Encoder;
 
@@ -15,48 +22,46 @@ import sun.misc.BASE64Encoder;
  * Handle communications with the island.is authentication service. See
  * http://en.wikipedia.org/wiki/Security_Assertion_Markup_Language for
  * information about SAML
- * 
- * @author Bjarni Sævarsson <bjarnis@us.is>
- * @author Atli Páll Hafsteinsson <atlip@us.is>
- * @reviewedby Logi Helgu at Sep 16, 2009( see JIRA issue INN-728 )
  */
 public class USIslandIsAuthenticationClient {
 
-	private static final Logger logger = LoggerFactory.getLogger( USIslandIsAuthenticationClient.class );
+	private static final Logger				logger				= LoggerFactory.getLogger( USIslandIsAuthenticationClient.class );
 
-	private static final String CERT_ROOT_NAMESPACE = "http://www.kogun.is/eGov/eGovSAMLGenerator.webServices";
-	private static final String IP_KEY = "IP";
-	private static final String TOKEN_KEY = "TOKEN";
-	private static final String SSN_KEY = "SSN";
-	private static final String SYSID_KEY = "SYSID";
-	private static final String AUTHMETHOD_KEY = "AUTHMETHOD";
-	private static final String STATUS_CODE_KEY = "status.code";
+	private static final String				IP_KEY				= "IP";
+	private static final String				TOKEN_KEY			= "TOKEN";
+	private static final String				SSN_KEY				= "SSN";
+	private static final String				SYSID_KEY			= "SYSID";
+	private static final String				AUTHMETHOD_KEY		= "AUTHMETHOD";																	// TODO: implement me
+	private static final String				STATUS_CODE_KEY		= "status.code";
 
-	private static final String CRLF = "\r\n";
-	private static final String USER_AGENT_NAME = "is.us.island.authenticate";
-	private static final String CONTENT_TYPE = "text/xml";
-	private static final String SERVER = "egov.webservice.is";
+	private static final String				CRLF				= "\r\n";
+	private static final String				USER_AGENT_NAME		= "is.us.island.authenticate";
+	private static final String				CONTENT_TYPE		= "text/xml";
 
-	private static final int PORT = 443;
-	private static final int SOCKET_TIMEOUT_MS = 4000;
+	private static final String				SAML_SERVER			= "egov.webservice.is";
+	private static final String				SAML_PATH			= "/sst/runtime.asvc/com.actional.soapstation.eGOVDKM_AuthConsumer.AccessPoint";
+	private static final String				SOAP_METHOD			= "generateSAMLFromToken";
+	private static final int				SAML_SERVER_PORT	= 443;
+	private static final int				SOCKET_TIMEOUT_MS	= 4000;
 
-	private static final String PATH = "/sst/runtime.asvc/com.actional.soapstation.eGOVDKM_AuthConsumer.AccessPoint";
-	private static final String SOAP_METHOD = "generateSAMLFromToken";
+	private String							_token;
+	private String							_userIp;
+	private String							_username;
+	private String							_password;
+	private String							_samlResponse;
 
-	private String _token;
-	private String _userIp;
-	private String _username;
-	private String _password;
-	private String _samlResponse;
-
-	private Map<String, String> _samlInfo;
+	private Map<String, String>				_samlInfo;
+	private static DocumentBuilderFactory	dbf					= DocumentBuilderFactory.newInstance();
+	static {
+		dbf.setNamespaceAware( true );
+	}
 
 	/**
 	 * Never construct this class using the default constructor, certain
 	 * parameters required.
 	 */
 	@SuppressWarnings( "unused" )
-	private USIslandIsAuthenticationClient() {}
+	private USIslandIsAuthenticationClient( ) {}
 
 	/**
 	 * @param token the login token received from island.is
@@ -78,7 +83,14 @@ public class USIslandIsAuthenticationClient {
 	}
 
 	public void authenticate() throws USIslandIsAuthenticationException {
-		samlInfo();// initiate the soap communications
+		parseSaml();// initiate the soap communications
+	}
+
+	/**
+	 * @return The Token currently being used.
+	 */
+	public String token() {
+		return _token;
 	}
 
 	/**
@@ -88,7 +100,7 @@ public class USIslandIsAuthenticationClient {
 	public String sysid() {
 		Map<String, String> samlInfo = samlInfo();
 
-		if( samlHasErrorStatus( samlInfo ) || !samlInfo.containsKey( SYSID_KEY ) ) {
+		if ( samlHasErrorStatus( samlInfo ) || !samlInfo.containsKey( SYSID_KEY ) ) {
 			return null;
 		}
 
@@ -103,6 +115,13 @@ public class USIslandIsAuthenticationClient {
 		return (samlInfo.containsKey( STATUS_CODE_KEY ) && !samlInfo.get( STATUS_CODE_KEY ).equals( "0" ));
 	}
 
+	private Map<String, String> samlInfo() {
+		if ( _samlInfo == null ) {
+			_samlInfo = parseSaml();
+		}
+		return _samlInfo;
+	}
+
 	/**
 	 * @return The user persidno from the saml response
 	 * @throws USIslandIsAuthenticationException if there is an error getting
@@ -111,16 +130,16 @@ public class USIslandIsAuthenticationClient {
 	public String persidno() {
 		Map<String, String> samlInfo = samlInfo();
 
-		if( (samlInfo == null) || !samlInfo.containsKey( SSN_KEY ) || samlHasErrorStatus( samlInfo ) ) {
+		if ( (samlInfo == null) || !samlInfo.containsKey( SSN_KEY ) || samlHasErrorStatus( samlInfo ) ) {
 			String errorMessage;
 
-			if( samlInfo == null ) {
+			if ( samlInfo == null ) {
 				errorMessage = "samlInfo == null";
 			}
 			else {
 				errorMessage = "SSN = " + samlInfo.get( SSN_KEY ) + " status.code = " + samlInfo.get( STATUS_CODE_KEY );
 			}
-			handleError( errorMessage );
+			throwIslandIsAuthenticationException( errorMessage );
 		}
 
 		return samlInfo.get( SSN_KEY );
@@ -138,89 +157,93 @@ public class USIslandIsAuthenticationClient {
 	 * @throws USIslandIsAuthenticationException if there is an error getting
 	 *         the SAML info
 	 */
-	private Map<String, String> samlInfo() {
-
-		if( _samlInfo != null ) {
-			return _samlInfo;
-		}
-
+	private Map<String, String> parseSaml() {
 		Map<String, String> info = new HashMap<String, String>();
 		info.put( TOKEN_KEY, _token );
 		info.put( IP_KEY, _userIp );
 
-		Builder parser = new Builder();
 		Document docXML = null;
 
+		_samlResponse = sendSoapRequest();
+
+		docXML = parseXml( _samlResponse );
+
+		checkSoapForFaults( info, docXML );
+
+		// fetch the soap function response from the soap body
+		Node soapResponseCertSaml = getFirstNodeByTagName( docXML, "generateSAMLFromTokenResponse" );
+
+		// Check for SAML error
+		checkSamlForErrors( info, soapResponseCertSaml );
+
+		// fetch the saml message from the soap function response
+		Node saml = getFirstNodeByTagName( docXML, "saml" );
+		String samlContent = saml.getFirstChild().getNodeValue().trim();
+
+		Node assertionEl = null;
+		// if the saml assertion is html encoded we need to re-parse it
+		if ( samlContent.startsWith( "<" ) ) {
+			docXML = parseXml( samlContent );
+		}
+		assertionEl = getFirstNodeByTagName( docXML, "Assertion", "urn:oasis:names:tc:SAML:1.0:assertion" );
+		insertAttributesInMap( info, assertionEl );
 		try {
-
-			_samlResponse = sendSoapRequest();
-			docXML = parser.build( _samlResponse, "" );
-
-			logger.debug( "Island.is xml response body: {}", docXML.toXML() );
-
-			// parse the whole soap message
-			Element body = null;
-			body = getSoapBody( docXML );
-			checkSoapForFaults( info, body );
-
-			// fetch the soap function response from the soap body
-			Element soapResponseCertSaml = firstChild( body, "generateSAMLFromTokenResponse", CERT_ROOT_NAMESPACE );
-
-			// Check for SAML error
-			checkSamlForErrors( info, soapResponseCertSaml );
-
-			// fetch the saml message from the soap function response
-			Element saml = soapResponseCertSaml.getFirstChildElement( "saml" );
-
-			// if saml is html encoded we need to re-parse it
-			Element assertion = parseAssertation( parser, saml );
-
-			insertAttributesInMap( info, assertion );
+			System.out.println( "validateSamlAssertion:" + validateSamlAssertion( docXML ) );
 		}
-		catch( ValidityException e ) {
-			String msg = "Error validating island.is XML";
-			handleError( e, msg );
-		}
-		catch( ParsingException e ) {
-			String msg = "Error parsing island.is XML";
-			handleError( e, msg );
-		}
-		catch( IOException e ) {
-			String msg = "Error reading island.is XML";
-			handleError( e, msg );
+		catch ( Exception e ) {
+			e.printStackTrace();
 		}
 
 		_samlInfo = info;
+		for ( String key : info.keySet() ) {
+			System.out.println( key + " = " + info.get( key ) );
+		}
 		return _samlInfo;
 	}
 
 	/**
-	 * Checks for error status codes in the SAML and sets them in the
-	 * information dictionary
-	 * 
-	 * @param info the dictionary to set the error messages in
-	 * @param soapResponseCertSaml the SAML to get status codes from
-	 * @throws USIslandIsAuthenticationException if the are errors
+	 * wrapper, that handles the exceptions, for {@link javax.xml.parsers.DocumentBuilder#parse(InputStream ) }
+	 * @param xml string
+	 * @return {@link org.w3c.dom.Document} 
 	 */
-	private void checkSamlForErrors( Map<String, String> info, Element soapResponseCertSaml ) {
-		Element status = soapResponseCertSaml.getFirstChildElement( "status" );
-		String type = status.getChildElements( "type" ).get( 0 ).getValue();
-		String code = status.getChildElements( "code" ).get( 0 ).getValue();
-		String msg = status.getChildElements( "message" ).get( 0 ).getValue();
-		info.put( "status.type", type );
-		info.put( STATUS_CODE_KEY, code );
-		info.put( "status.message", msg );
-		if( !code.equals( "0" ) ) {
-			handleError( "SAML message is not valid! A" );
+	public Document parseXml( String xml ) {
+		try {
+			return dbf.newDocumentBuilder().parse( new ByteArrayInputStream( xml.getBytes( "UTF-8" ) ) );
 		}
+		catch ( SAXException e ) {
+			throwIslandIsAuthenticationException( "Error parsing xml message", e );
+		}
+		catch ( ParserConfigurationException e ) {
+			throwIslandIsAuthenticationException( "Error parsing saml", e );
+		}
+		catch ( IOException e ) {
+			throwIslandIsAuthenticationException( "Error parsing soap message", e );
+		}
+		return null;// we will never reach this part
 	}
 
 	/**
-	 * @param soapDocument the SOAP document to the body from
-	 * @return the SOAP body from the given document
+	 * Returns the first element in the list returned from {@link org.w3c.dom.Document#getElementsByTagNameNS(String, String) }
 	 */
-	private Element getSoapBody( Document soapDocument ) {
-		return firstChild( soapDocument.getRootElement(), "Body", "http://schemas.xmlsoap.org/soap/envelope/" );
+	private Node getFirstNodeByTagName( Document doc, String tagName ) {
+		return getFirstNodeByTagName( doc, tagName, null );
+	}
+
+	/**
+	 * Returns the first element in the list returned from {@link org.w3c.dom.Document#getElementsByTagNameNS(String, String) }
+	 */
+	private Node getFirstNodeByTagName( Document doc, String tagName, String namespace ) {
+		NodeList list;
+		if ( namespace != null ) {
+			list = doc.getElementsByTagNameNS( namespace, tagName );
+		}
+		else {
+			list = doc.getElementsByTagName( tagName );
+		}
+		if ( (list != null) && (list.getLength() > 0) ) {
+			return list.item( 0 );
+		}
+		return null;
 	}
 
 	/**
@@ -229,108 +252,34 @@ public class USIslandIsAuthenticationClient {
 	 * @param info the map to put the attributes in
 	 * @param assertion the assertion
 	 */
-	private void insertAttributesInMap( Map<String, String> info, Element assertion ) {
-		Element AttributeStatement = firstChild( assertion, "AttributeStatement", "urn:oasis:names:tc:SAML:1.0:assertion" );
-		Elements attributes = AttributeStatement.getChildElements();
-
+	private void insertAttributesInMap( Map<String, String> info, Node assertion ) {
+		Node attributeStatement = ((Element)assertion).getElementsByTagName( "AttributeStatement" ).item( 0 );//firstChild( assertion, "AttributeStatement", "urn:oasis:names:tc:SAML:1.0:assertion" );
+		NodeList attributesNodes = attributeStatement.getChildNodes();
 		// Insert all the attributes, from the Attributestatement tag, into the info dictionary
-		for( int i = 0; i < attributes.size(); i++ ) {
-			Element child = attributes.get( i );
+		for ( int i = 0; i < attributesNodes.getLength(); i++ ) {
+			Node child = attributesNodes.item( i );
 
-			if( child.getLocalName().equals( "Attribute" ) ) {
-				String key = child.getAttribute( "AttributeName" ).getValue();
-				String val = child.getChildElements().get( 0 ).getValue();
-				info.put( key, val );
-			}
-		}
-	}
-
-	/**
-	 * Parses the assertion element from the SAML message
-	 * 
-	 * @param parser the xml parser to use
-	 * @param saml the SAML message
-	 * @return the assertion element from the SAML message
-	 * @throws USIslandIsAuthenticationException if there is an error
-	 */
-	private Element parseAssertation( Builder parser, Element saml ) {
-		Document docXML;
-		Element assertion = null;
-
-		// If there are no child elements the stuff is html encoded, and needs to have a separate parse
-		if( saml.getChildElements().size() == 0 ) {
-			try {
-
-				docXML = parser.build( saml.getValue(), "" );
-				assertion = docXML.getRootElement();
-
-				// in case Assertion tag is not the root element we dig deeper for it
-				if( !assertion.getLocalName().equals( "Assertion" ) ) {
-					Elements samlChildren = assertion.getChildElements();
-					boolean assertFound = false;
-					for( int i = 0; i < samlChildren.size(); i++ ) {
-						Element child = samlChildren.get( i );
-						if( child.getLocalName().equals( "Assertion" ) ) {
-							assertion = child;
-							assertFound = true;
-							break;
-						}
-					}
-					if( !assertFound ) {
-						handleError( "island.is SAML message is not valid!B" );
+			if ( child.getLocalName().equals( "Attribute" ) ) {
+				String key = null;
+				String val;
+				NamedNodeMap attributes = child.getAttributes();
+				for ( int a = 0; a < attributes.getLength(); a++ ) {
+					Node att = attributes.item( a );
+					if ( att.getLocalName().equals( "AttributeName" ) ) {
+						key = att.getTextContent();
+						break;
 					}
 				}
+				val = child.getChildNodes().item( 0 ).getTextContent();
+				if ( key != null ) {
+					info.put( key, val );
+				}
 			}
-			catch( ValidityException e ) {
-				handleError( e, "Error validating island.is XML" );
-			}
-			catch( ParsingException e ) {
-				handleError( e, "Error parsing island.is XML" );
-			}
-			catch( IOException e ) {
-				handleError( e, "Error reading island.is XML" );
-			}
-		}
-
-		if( assertion == null ) {
-			assertion = firstChild( saml, "Assertion", "urn:oasis:names:tc:SAML:1.0:assertion" );
-		}
-
-		if( assertion == null ) {
-			handleError( "island.is SAML message is not valid, Assertion tag not found!" );
-		}
-
-		return assertion;
-	}
-
-	/**
-	 * Check for faults in the SOAP messages and sets them in the information
-	 * dictionary
-	 * 
-	 * @param info the dictionary to set the fault messages in
-	 * @param body the {@link nu.xom.Element} (SOAP message) to check for faults
-	 */
-	private void checkSoapForFaults( Map<String, String> info, Element body ) {
-		Element fault = body.getChildElements().get( 0 );
-
-		if( (fault != null) && (fault.getLocalName().equals( "Fault" )) ) {
-			Elements faultAttributes = fault.getChildElements();
-
-			for( int i = 0; i < faultAttributes.size(); i++ ) {
-				Element child = faultAttributes.get( i );
-				String key = child.getLocalName();
-				String val = child.getValue();
-				info.put( key, val );
-				logger.error( key + " = " + val );
-			}
-
-			handleError( "SOAP message is not valid!" );
 		}
 	}
 
 	/**
 	 * Handles the SAML request/response through a SSL socket
-	 * 
 	 * @return the response from the island.is authentication service
 	 */
 	private String sendSoapRequest() {
@@ -340,7 +289,7 @@ public class USIslandIsAuthenticationClient {
 		StringBuilder response = new StringBuilder();
 
 		try {
-			socket = (SSLSocket)sf.createSocket( SERVER, PORT );
+			socket = (SSLSocket)sf.createSocket( SAML_SERVER, SAML_SERVER_PORT );
 			socket.setSoTimeout( SOCKET_TIMEOUT_MS );
 
 			socket.startHandshake();
@@ -355,8 +304,8 @@ public class USIslandIsAuthenticationClient {
 			// Read the response headers
 			String line;
 
-			while( (line = dataIn.readLine()) != null ) {
-				if( line.length() == 0 ) {
+			while ( (line = dataIn.readLine()) != null ) {
+				if ( line.length() == 0 ) {
 					break;
 				}
 				xmlResponseHeaders.append( line + CRLF );
@@ -365,21 +314,21 @@ public class USIslandIsAuthenticationClient {
 			logger.debug( "island.is xml response headers: " + xmlResponseHeaders.toString() );
 
 			// Read the response body
-			while( (line = dataIn.readLine()) != null ) {
+			while ( (line = dataIn.readLine()) != null ) {
 				response.append( line + CRLF );
 			}
 		}
-		catch( NoClassDefFoundError e ) {
-			handleError( e, "SSLSocket handshake error" );
+		catch ( NoClassDefFoundError e ) {
+			throwIslandIsAuthenticationException( "SSLSocket handshake error", e );
 		}
-		catch( IOException e ) {
-			handleError( e, "IOException when communicating with island.is" );
+		catch ( IOException e ) {
+			throwIslandIsAuthenticationException( "IOException when communicating with island.is", e );
 		}
 		finally {
 			try {
 				socket.close();
 			}
-			catch( Exception e ) {
+			catch ( Exception e ) {
 				logger.error( "Failed to close island.is communications socket", e );
 			}
 		}
@@ -397,7 +346,7 @@ public class USIslandIsAuthenticationClient {
 	private String soapMessageHeaders( String token, String userIp, String username, String password ) {
 		StringBuilder headers = new StringBuilder();
 
-		headers.append( "POST " + PATH + " HTTP/1.0" + CRLF );
+		headers.append( "POST " + SAML_PATH + " HTTP/1.0" + CRLF );
 		headers.append( "User-Agent: " + USER_AGENT_NAME + CRLF );
 		headers.append( "Host: us.is" + CRLF );
 		headers.append( "Content-Type: " + CONTENT_TYPE + CRLF );
@@ -435,53 +384,124 @@ public class USIslandIsAuthenticationClient {
 	}
 
 	/**
-	 * Returns the first child element, from parent, with given name. Attempts
-	 * to search in a new namespace if parent namespace returns null.
-	 * 
-	 * @param parent Element to search in.
-	 * @param name Name of the child element to return.
-	 * @param namespace Namespace of the child element.
+	 * Validates the xml signature
+	 * @param samlDoc 
+	 * @return
 	 */
-	private Element firstChild( Element parent, String name, String namespace ) {
-		Element childElement = parent.getFirstChildElement( name );
+	public boolean validateSamlAssertion( Document samlDoc ) {
 
-		if( (childElement == null) && (namespace != null) ) {
-			childElement = parent.getFirstChildElement( name, namespace );
+		// Find Signature element
+		NodeList nl = samlDoc.getElementsByTagNameNS( XMLSignature.XMLNS, "Signature" );
+		if ( nl.getLength() == 0 ) {
+			throwIslandIsAuthenticationException( "Can't find assertion Signature element" );
 		}
 
-		return childElement;
+		XMLSignatureFactory fac = XMLSignatureFactory.getInstance( "DOM" );
+
+		NodeList rsa = samlDoc.getElementsByTagNameNS( XMLSignature.XMLNS, "X509Certificate" );
+		PublicKey publicKey = null;
+		try {
+			publicKey = loadCertificate( rsa.item( 0 ).getTextContent() );
+		}
+		catch ( CertificateException e ) {
+			throwIslandIsAuthenticationException( "Assertion certificate is not valid", e );
+		}
+		catch ( DOMException e ) {
+			throwIslandIsAuthenticationException( "Can't find the Assertion certificate", e );
+		}
+
+		DOMValidateContext valContext = new DOMValidateContext( publicKey, nl.item( 0 ) );
+
+		// no schema used so we need to explicitly register id attribute
+		NodeList foo = samlDoc.getElementsByTagNameNS( "urn:oasis:names:tc:SAML:1.0:assertion", "Assertion" );
+		valContext.setIdAttributeNS( (Element)foo.item( 0 ), null, "AssertionID" );
+		((Element)foo.item( 0 )).setIdAttribute( "AssertionID", true );
+
+		// unmarshal the XMLSignature
+		XMLSignature signature = null;
+		try {
+			signature = fac.unmarshalXMLSignature( valContext );
+		}
+		catch ( MarshalException e ) {
+			throwIslandIsAuthenticationException( "Error unmarshaling the Assertion signature", e );
+		}
+
+		// Validate the XMLSignature (generated above)
+		try {
+			signature.validate( valContext );
+		}
+		catch ( XMLSignatureException e ) {
+			throwIslandIsAuthenticationException( "The assertion signature is not valid!", e );
+		}
+		return true;
 	}
 
 	/**
-	 * Logs errors and throws and {@link USIslandIsAuthenticationException}
-	 * exception
-	 * 
-	 * @param e the underlying error
-	 * @param msg the error message
-	 * @throws USIslandIsAuthenticationException
+	 * Loads the certificate from base64 encoded string and returns it's public key
+	 * @param certificate base64 encoded string
+	 * @throws CertificateException if the certificate is invalid or not found
 	 */
-	private void handleError( Throwable e, String msg ) {
+	private PublicKey loadCertificate( String certificate ) throws CertificateException {
+		CertificateFactory fty = CertificateFactory.getInstance( "X.509" );
+		ByteArrayInputStream bais = new ByteArrayInputStream( DatatypeConverter.parseBase64Binary( certificate ) );
+		return fty.generateCertificate( bais ).getPublicKey();
+	}
+
+	/**
+	 * Check for faults in the SOAP messages and sets them in the information
+	 * dictionary
+	 * 
+	 * @param info the dictionary to set the fault messages in
+	 * @param body the {@link nu.xom.Element} (SOAP message) to check for faults
+	 */
+	private void checkSoapForFaults( Map<String, String> info, Document doc ) {
+		Node fault = getFirstNodeByTagName( doc, "Fault" );
+		if ( fault != null ) {
+			NodeList faultAttributes = fault.getChildNodes();
+			for ( int i = 0; i < faultAttributes.getLength(); i++ ) {
+				Node child = faultAttributes.item( i );
+				String key = child.getLocalName();
+				String val = child.getTextContent();
+				info.put( key, val );
+				logger.error( key + " = " + val );
+			}
+			throwIslandIsAuthenticationException( "SOAP message is not valid!" );
+		}
+	}
+
+	/**
+	 * Checks for error status codes in the SAML and sets them in the
+	 * information dictionary
+	 * 
+	 * @param info the dictionary to set the error messages in
+	 * @param soapResponseCertSaml the SAML to get status codes from
+	 * @throws USIslandIsAuthenticationException if the are errors
+	 */
+	private void checkSamlForErrors( Map<String, String> info, Node statusNode ) {
+		if ( statusNode == null ) {
+			return;
+		}
+		Element status = (Element)statusNode;
+		String type = status.getElementsByTagName( "type" ).item( 0 ).getTextContent();
+		String code = status.getElementsByTagName( "code" ).item( 0 ).getTextContent();
+		String msg = status.getElementsByTagName( "message" ).item( 0 ).getTextContent();
+		info.put( "status.type", type );
+		info.put( "status.code", code );
+		info.put( "status.message", msg );
+		if ( !code.equals( "0" ) ) {
+			throwIslandIsAuthenticationException( "SAML message is not valid! Error type=" + type + ", code=" + code + ", msg=" + msg );
+		}
+	}
+
+	private void throwIslandIsAuthenticationException( String msg, Throwable e ) {
 		logger.error( msg );
 		throw new USIslandIsAuthenticationException( msg, e );
 	}
 
-	/**
-	 * Logs errors and throws and {@link USIslandIsAuthenticationException}
-	 * exception
-	 * 
-	 * @param msg the error message
-	 * @throws USIslandIsAuthenticationException
-	 */
-	private void handleError( String msg ) {
+	private void throwIslandIsAuthenticationException( String msg ) {
 		logger.error( msg );
 		throw new USIslandIsAuthenticationException( msg );
 
 	}
 
-	/**
-	 * @return The Token currently being used.
-	 */
-	public String token() {
-		return _token;
-	}
 }
