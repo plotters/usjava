@@ -16,8 +16,6 @@ import org.slf4j.*;
 import org.w3c.dom.*;
 import org.xml.sax.SAXException;
 
-import sun.misc.BASE64Encoder;
-
 /**
  * Handle communications with the island.is authentication service. See
  * http://en.wikipedia.org/wiki/Security_Assertion_Markup_Language for
@@ -350,7 +348,7 @@ public class USIslandIsAuthenticationClient {
 		headers.append( "User-Agent: " + USER_AGENT_NAME + CRLF );
 		headers.append( "Host: us.is" + CRLF );
 		headers.append( "Content-Type: " + CONTENT_TYPE + CRLF );
-		headers.append( "Authorization: " + "Basic " + new BASE64Encoder().encode( new String( username + ":" + password ).getBytes() ) + CRLF );
+		headers.append( "Authorization: " + "Basic " + DatatypeConverter.printBase64Binary( new String( username + ":" + password ).getBytes() ) + CRLF );
 		headers.append( "Content-Length: " + soapMessageBody( token, userIp ).length() + CRLF );
 		headers.append( "Soapaction: " + SOAP_METHOD + CRLF );
 		headers.append( CRLF );
